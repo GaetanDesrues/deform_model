@@ -10,6 +10,7 @@ from BasePackage.Pipeline import ModelParams, ElecModel
 from HeartDB.analyse.sobol.test_sensivity import SensitivityAnalysis
 from matplotlib import pyplot as plt
 from matplotlib.pyplot import setp
+from scipy.stats import pearsonr
 from sklearn.linear_model import RidgeCV
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV
@@ -38,10 +39,10 @@ def main():
     # g.plot_values()
 
     # g.train_models()  # /!\ overriding and time consuming
-    g.print_results_ml()
-    g.plot_ml_test_resutls()
+    # g.print_results_ml()
+    # g.plot_ml_test_resutls()
 
-    # g.test_elec_model()  # /!\ overriding and time consuming
+    g.test_elec_model()  # /!\ overriding and time consuming
 
 
 def get_pa_fe():
@@ -51,6 +52,9 @@ def get_pa_fe():
     # df = pd.concat([pa, fe], axis=1)
     # print(df.shape)
     # print(df.head())
+
+    # print(fe.index[np.where(fe['vol_lv_blood']<)])
+    # breakpoint()
 
     return pa, fe
 
@@ -200,11 +204,11 @@ class Manager:
     def test_elec_model(self):
         target = pd.Series(
             {
-                "vol_lv_blood": 120,
-                "vol_rv_blood": 90,
-                "dist_apico_basal": 110,
-                "dist_diameter": 60,
-                "dist_septum_thickness": 10,
+                "vol_lv_blood": 130,
+                "vol_rv_blood": 80,
+                "dist_apico_basal": 85,
+                "dist_diameter": 50,
+                "dist_septum_thickness": 12,
             },
             name="target",
         )
@@ -221,12 +225,34 @@ class Manager:
             results[k] = r
         pickle.dump(results, open(self.out.results, "wb"))
 
+    def load_result(self):
+        return pickle.load(open(self.out.results, "rb"))
+
     def plot_sa(self):
         sa = SensitivityAnalysis(self.pa, self.fe)
         print(sa.table)
         with tf.SPlot(self.out / "prcc_anat.png"):
             fig = sa.plot_table()
             fig.tight_layout()
+
+    def plot_sa_fe(self):
+        def calculate_pvalues(df):
+            df = df.dropna()._get_numeric_data()
+            dfcols = pd.DataFrame(columns=df.columns)
+            pvalues = dfcols.transpose().join(dfcols, how="outer")
+            for r in df.columns:
+                for c in df.columns:
+                    pvalues[r][c] = round(pearsonr(df[r], df[c])[1], 4)
+            return pvalues
+
+        pvalues = calculate_pvalues(self.fe)
+        print(pvalues)
+        print(self.fe.corr())
+        # sa = SensitivityAnalysis(self.fe, self.fe)
+        # print(sa.table)
+        # with tf.SPlot(self.out / "prcc_anat_fe.png"):
+        #     fig = sa.plot_table()
+        #     fig.tight_layout()
 
     def plot_values(self):
         with tf.SPlot(fname=self.out / "plots_anat.png"):
@@ -315,7 +341,7 @@ def setBoxColors(bp):
     setp(bp["boxes"], color="blue")
 
 
-def boxplot(data, name, cols):
+def boxplot(data, cols):
     with tf.SPlot():
         fig, axs = plt.subplots(ncols=3)
         axs = axs.ravel()
@@ -326,7 +352,7 @@ def boxplot(data, name, cols):
         #     for std in range(1, 4)
         # ]
         all_data = np.array(list(data.values()))
-        print(all_data.shape)
+        # print(all_data.shape)
         labels = data.keys()
 
         bps = []
@@ -376,7 +402,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
     log = tf.get_logger()
 
-    # # main()
+    main()
     # for scaler in Manager.SCALERS.keys():
     #     print(f"{scaler:-^30}")
     #     g = Manager(*get_pa_fe(), scaler)
@@ -385,7 +411,13 @@ if __name__ == "__main__":
     #     print(plot_data)
     #     break
 
-    pa, fe = get_pa_fe()
-    g = Manager(pa, fe, Manager.MINMAXSCALER)
-    plot_data = g.plot_ml_test_resutls()
-    boxplot(plot_data, Manager.NOSCALER, pa.columns)
+    # pa, fe = get_pa_fe()
+    # g = Manager(pa, fe, Manager.MINMAXSCALER)
+    # plot_data = g.plot_ml_test_resutls()
+    # boxplot(plot_data, Manager.NOSCALER, pa.columns)
+
+    # for scaler in Manager.SCALERS.keys():
+    #     print(f"{scaler:-^30}")
+    #     g = Manager(pa, fe, scaler)
+    #     results = g.load_result()
+    #     print(results)
