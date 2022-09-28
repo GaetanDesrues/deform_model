@@ -41,9 +41,9 @@ def main():
         # g.plot_sa()
         # g.plot_values()
 
-        g.train_models()  # /!\ overriding and time consuming
+        # g.train_models()  # /!\ overriding and time consuming
         # g.print_results_ml()
-        # g.plot_ml_test_resutls()
+        g.plot_ml_test_resutls()
 
         # g.test_elec_model()  # /!\ overriding and time consuming
 
@@ -278,12 +278,18 @@ class Manager:
         results = {}
         for k, v in methods.items():
             x = v.scaler.transform([target])
+            if v.scaler.__class__.__name__ != "FunctionTransformer":
+                x = v.pca.transform(x)
             pred = pd.DataFrame(v.estimator.predict(x), columns=self.pa.columns)
-            ft_pred = pd.Series(predict_one(pred.iloc[0].to_dict()), name="pred")
-            r = pd.concat((target, ft_pred), axis=1)
-            r["E"] = np.square(r["target"] - r["pred"])
-            print(r)
-            results[k] = r
+            try:
+                ft_pred = pd.Series(predict_one(pred.iloc[0].to_dict()), name="pred")
+            except SimulationCrashed:
+                print("SimulationCrashed")
+            else:
+                r = pd.concat((target, ft_pred), axis=1)
+                r["E"] = np.square(r["target"] - r["pred"])
+                print(r)
+                results[k] = r
         pickle.dump(results, open(self.out.results, "wb"))
 
     def load_result(self):
