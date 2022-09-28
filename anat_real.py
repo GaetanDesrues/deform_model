@@ -11,7 +11,9 @@ from HeartDB.analyse.sobol.test_sensivity import SensitivityAnalysis
 from matplotlib import pyplot as plt
 from matplotlib.pyplot import setp
 from scipy.stats import pearsonr
-from sklearn.linear_model import RidgeCV
+from sklearn.decomposition import PCA
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.linear_model import RidgeCV, Ridge
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import RepeatedKFold, cross_val_score
@@ -34,15 +36,16 @@ NoScaler = FunctionTransformer(lambda_x)
 def main():
     pa, fe = get_pa_fe()
 
-    g = Manager(pa, fe, Manager.MINMAXSCALER)
-    # g.plot_sa()
-    # g.plot_values()
+    for s in Manager.SCALERS:
+        g = Manager(pa, fe, s)
+        # g.plot_sa()
+        # g.plot_values()
 
-    # g.train_models()  # /!\ overriding and time consuming
-    # g.print_results_ml()
-    # g.plot_ml_test_resutls()
+        g.train_models()  # /!\ overriding and time consuming
+        # g.print_results_ml()
+        # g.plot_ml_test_resutls()
 
-    g.test_elec_model()  # /!\ overriding and time consuming
+        # g.test_elec_model()  # /!\ overriding and time consuming
 
 
 def get_pa_fe():
@@ -72,7 +75,7 @@ class Manager:
     def __init__(self, pa, fe, scaler: str):
         assert scaler in self.SCALERS
         self.scaler = self.SCALERS[scaler]
-        self.out = tf.f(__file__, "out").dump()
+        self.out = tf.f(__file__, "out_pca").dump()
         tf.logd(self.out)
         q = self.scaler.__class__.__name__
         q = q.replace("FunctionTransformer", "NoScaler")
@@ -81,7 +84,12 @@ class Manager:
         self.fe = fe
 
     def train_models(self):
-        methods = {"ridge": self.ridge(), "knn": self.knn(), "nn": self.nn()}
+        methods = {
+            "ridge": self.ridge(),
+            "kernel_ridge": self.kernel_ridge(),
+            "knn": self.knn(),
+            "nn": self.nn(),
+        }
         pickle.dump(methods, open(self.out.models, "wb"))
 
     @cache
@@ -94,13 +102,20 @@ class Manager:
         x_train = pd.DataFrame(scaler.transform(x_train), columns=self.fe.columns)
         x_test = pd.DataFrame(scaler.transform(x_test), columns=self.fe.columns)
 
-        return x_train, x_test, y_train, y_test, scaler
+        pca = None
+        if self.scaler.__class__.__name__ != "FunctionTransformer":
+            pca = PCA(n_components=3)
+            pca.fit(x_train)
+            x_train = pca.transform(x_train)
+            x_test = pca.transform(x_test)
+
+        return x_train, x_test, y_train, y_test, scaler, pca
 
     def ridge(self):
-        x_train, x_test, y_train, y_test, scaler = self.split()
+        x_train, x_test, y_train, y_test, scaler, pca = self.split()
 
         reg = RidgeCV(alphas=np.logspace(-4, 4, 200))
-        cv = RepeatedKFold(n_splits=10, n_repeats=1)
+        cv = RepeatedKFold(n_splits=3, n_repeats=1)
         reg.fit(x_train, y_train)
         scores = cross_val_score(
             reg, x_train, y_train, scoring="neg_mean_squared_error", cv=cv
@@ -119,20 +134,56 @@ class Manager:
             "mse_test_std": np.std(test_err),
             "test_samples": (x_test, y_test),
             "r2": r2_score(y_test, pred),
+            "pca": pca,
+        }
+
+    def kernel_ridge(self):
+        x_train, x_test, y_train, y_test, scaler, pca = self.split()
+
+        cv = RepeatedKFold(n_splits=3, n_repeats=1)
+        reg = KernelRidge(kernel="rbf", gamma=2.84)  # , cv=cv)
+        # reg = GridSearchCV(
+        #     reg_,
+        #     {"alpha": np.logspace(-4, 4, 200), "kernel": ["linear", "polynomial", "rbf"]},
+        #     scoring="neg_mean_squared_error",
+        #     cv=cv,
+        #     n_jobs=-1,
+        # )
+        reg.fit(x_train, y_train)
+        scores = cross_val_score(
+            reg, x_train, y_train, scoring="neg_mean_squared_error", cv=cv
+        )
+        scores = np.abs(scores)
+        pred = pd.DataFrame(reg.predict(x_test), columns=self.pa.columns)
+        test_err = mean_squared_error(y_test, pred, multioutput="raw_values")
+
+        return {
+            "scaler": scaler,
+            "estimator": reg,
+            # "alpha": reg.best_estimator_.alpha,
+            "mse_train": np.mean(scores),
+            "mse_train_std": np.std(scores),
+            "mse_test": np.mean(test_err),
+            "mse_test_std": np.std(test_err),
+            "test_samples": (x_test, y_test),
+            "r2": r2_score(y_test, pred),
+            "pca": pca,
         }
 
     def knn(self):
-        x_train, x_test, y_train, y_test, scaler = self.split()
+        x_train, x_test, y_train, y_test, scaler, pca = self.split()
 
-        reg_ = KNeighborsRegressor()
-        cv = RepeatedKFold(n_splits=10, n_repeats=1)
-        reg = GridSearchCV(
-            reg_,
-            {"n_neighbors": np.linspace(1, 30, 20, dtype=int)},
-            scoring="neg_mean_squared_error",
-            cv=cv,
-            n_jobs=-1,
+        cv = RepeatedKFold(n_splits=3, n_repeats=1)
+        reg = KNeighborsRegressor(
+            weights="distance", algorithm="ball_tree", n_neighbors=6
         )
+        # reg = GridSearchCV(
+        #     reg_,
+        #     {"n_neighbors": np.linspace(1, 30, 20, dtype=int)},
+        #     scoring="neg_mean_squared_error",
+        #     cv=cv,
+        #     n_jobs=-1,
+        # )
         reg.fit(x_train, y_train)
         scores = cross_val_score(
             reg, x_train, y_train, scoring="neg_mean_squared_error", cv=cv
@@ -144,27 +195,36 @@ class Manager:
         return {
             "scaler": scaler,
             "estimator": reg,
-            "n_neighbors": reg.best_estimator_.n_neighbors,
+            # "n_neighbors": reg.best_estimator_.n_neighbors,
             "mse_train": np.mean(scores),
             "mse_train_std": np.std(scores),
             "mse_test": np.mean(test_err),
             "mse_test_std": np.std(test_err),
             "test_samples": (x_test, y_test),
             "r2": r2_score(y_test, pred),
+            "pca": pca,
         }
 
     def nn(self):
-        x_train, x_test, y_train, y_test, scaler = self.split()
+        x_train, x_test, y_train, y_test, scaler, pca = self.split()
 
-        cv = RepeatedKFold(n_splits=10, n_repeats=1)
-        reg_ = MLPRegressor(max_iter=1000)
-        reg = GridSearchCV(
-            reg_,
-            {"hidden_layer_sizes": [(100,), (50, 50), (25, 25, 25)]},
-            scoring="neg_mean_squared_error",
-            cv=cv,
-            n_jobs=-1,
+        cv = RepeatedKFold(n_splits=3, n_repeats=1)
+        reg = MLPRegressor(
+            max_iter=1000,
+            batch_size=100,
+            learning_rate="adaptive",
+            hidden_layer_sizes=(50, 100),
+            learning_rate_init=0.01,
+            activation="tanh",
+            # cv=cv,
         )
+        # reg = GridSearchCV(
+        #     reg_,
+        #     {"hidden_layer_sizes": [(100,), (50, 50), (25, 25, 25)]},
+        #     scoring="neg_mean_squared_error",
+        #     cv=cv,
+        #     n_jobs=-1,
+        # )
         reg.fit(x_train, y_train)
         scores = cross_val_score(
             reg, x_train, y_train, scoring="neg_mean_squared_error", cv=cv
@@ -176,13 +236,14 @@ class Manager:
         return {
             "scaler": scaler,
             "estimator": reg,
-            "hidden_layer_sizes": reg.best_estimator_.hidden_layer_sizes,
+            # "hidden_layer_sizes": reg.best_estimator_.hidden_layer_sizes,
             "mse_train": np.mean(scores),
             "mse_train_std": np.std(scores),
             "mse_test": np.mean(test_err),
             "mse_test_std": np.std(test_err),
             "test_samples": (x_test, y_test),
             "r2": r2_score(y_test, pred),
+            "pca": pca,
         }
 
     def pred_test(self, estimator, x, y):
@@ -194,10 +255,10 @@ class Manager:
 
     def print_results_ml(self):
         methods = tf.munchify(pickle.load(open(self.out.models, "rb")))
-        _, x, _, y, _ = self.split()
+        _, x, _, y, _, _ = self.split()
         idx = np.random.choice(x.shape[0])
 
-        for m in ("ridge", "knn", "nn"):
+        for m in ("ridge", "kernel_ridge", "knn", "nn"):
             r = self.pred_test(methods[m].estimator, x.iloc[idx], y.iloc[idx])
             print(f"{m:-^31}\n{r}\nMSE={r['E'].mean()}")
 
@@ -270,10 +331,10 @@ class Manager:
 
     def plot_ml_test_resutls(self):
         methods = tf.munchify(pickle.load(open(self.out.models, "rb")))
-        _, x, _, y, _ = self.split()
+        _, x, _, y, _, _ = self.split()
         plot_data = {}
 
-        for m in ("ridge", "knn", "nn"):
+        for m in ("ridge", "kernel_ridge", "knn", "nn"):
             print(f"{m:-^31}")
 
             print(
@@ -403,6 +464,7 @@ if __name__ == "__main__":
     log = tf.get_logger()
 
     main()
+
     # for scaler in Manager.SCALERS.keys():
     #     print(f"{scaler:-^30}")
     #     g = Manager(*get_pa_fe(), scaler)
