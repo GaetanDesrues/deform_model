@@ -1,4 +1,5 @@
 import logging
+import os
 import pickle
 
 import numpy as np
@@ -50,6 +51,8 @@ class MecaProblem(ElementwiseProblem):
 
 @dask_task
 def start_one_task(opt_params: ModelParams) -> float:
+    os.environ["CARDIAC_CLUSTER"] = "1"
+
     with tf.TmpDir() as o:
         opt_params.out_dir(o / tf.get_string())
         opt_params.anat_db_path(tf.env("SIMUS") / "db_anat_db")
@@ -87,10 +90,10 @@ def warm_start():
 
 def main():
     opt = Options(
-        popsize=50,
+        popsize=30,
         maxiter=50,
-        local_n_workers=12,
-        local_threads_per_worker=2,
+        local_n_workers=15,
+        local_threads_per_worker=1,
     )
     client = get_client(opt)
 
